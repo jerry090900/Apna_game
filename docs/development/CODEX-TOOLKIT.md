@@ -1,0 +1,5 @@
+# Codex toolkit review
+
+Reviewed [ECC](https://github.com/affaan-m/ECC) at `b38be6a7f6350964d59328b52f0624e1d1d552d1`: its README documents native Codex plugin support and separately trusted hooks. This repository adopts evidence-first diagnosis, targeted regression tests and explicit verification limits as local instructions. No ECC installer, plugin, or hook is enabled. Codex Cloud skill discovery depends on the client loading repository skills; validate in a fresh session.
+
+`tools/ppc-mcp-server` is a Node/TypeScript stdio analysis server with indexing and annotations. Its source writes cache and annotation files and includes child-process functionality; paths and permissions need review before activation. `tools/mcp-gta4/server.js` is a Node stdio analysis server expecting local `gta_iv` data and an MCP SDK dependency; its data availability, dependencies, and tool behavior need review. Neither was installed or activated. Do not enable `tools/terminal-mcp-server` without necessity and security review.
