@@ -1,0 +1,107 @@
+name: Build XHYN IV ARM64 verification APK
+
+on:
+  push:
+    branches:
+      - codex/arm64-apk-build-20261108
+    paths:
+      - .github/workflows/build-arm64-apk.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xhyn-arm64-verification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-arm64:
+    name: Compile native ARM64 and package unsigned APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      BUILD_TYPE: Release
+      STRIP: "1"
+      NDK_VER: 29.0.14206865
+
+    steps:
+      - name: Check out pinned source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Configure JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CMake and Ninja
+        run: python -m pip install 'cmake==3.31.6' 'ninja>=1.11,<2'
+
+      - name: Install Android SDK tooling
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform, build tools and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          df -h .
+
+      - name: Initialize pinned repository dependencies
+        run: |
+          python3 tools/setup_repo.py
+          python3 tools/setup_repo.py --check
+
+      - name: Obtain pinned shader toolchain
+        run: bash os/android/scripts/setup_host_tools.sh
+
+      - name: Build ARM64 Vulkan driver proxy
+        run: bash os/android/scripts/build_driver_proxy.sh
+
+      - name: Build complete ARM64 native game runtime
+        run: bash os/android/scripts/build_native.sh 2
+
+      - name: Package and verify unsigned ARM64 APK
+        run: |
+          python3 os/android/scripts/package_release.py --unsigned --output out/XHYN-IV-ARM64-unsigned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging out/XHYN-IV-ARM64-unsigned.apk | grep "^package: name='com.xhyn.ivrecomp'"
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          apk = Path("out/XHYN-IV-ARM64-unsigned.apk")
+          required = {
+              "libmain.so", "libliberty_install.so", "librexruntime.so",
+              "librexgpu-gta4-native.so", "librexgpu-xenos.so", "libSDL3.so",
+              "libc++_shared.so", "libvulkan.so", "libmain_hook.so",
+              "libhook_impl.so", "libc11_threads_compat.so",
+          }
+          with zipfile.ZipFile(apk) as z:
+              libs = [name for name in z.namelist() if name.startswith("lib/")]
+              actual = {name.rsplit("/",1)[-1] for name in libs}
+              assert actual == required, f"Incorrect native lib set: {actual ^ required}"
+              assert all(name.startswith("lib/arm64-v8a/") for name in libs)
+              assert z.testzip() is None
+          print(f"Verified unsigned ARM64 APK ({apk.stat().st_size} bytes)")
+          PY
+          sha256sum out/XHYN-IV-ARM64-unsigned.apk > out/XHYN-IV-ARM64-unsigned.apk.sha256
+
+      - name: Upload APK for signing review (NOT installable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: XHYN-IV-arm64-UNSIGNED-not-installable
+          path: |
+            out/XHYN-IV-ARM64-unsigned.apk
+            out/XHYN-IV-ARM64-unsigned.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
