@@ -1,0 +1,156 @@
+name: Build XHYN IV ARM64 APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      signing:
+        description: "Unsigned candidate or signed release (requires configured stable release secrets)"
+        required: true
+        type: choice
+        options:
+          - unsigned
+          - signed-release
+        default: unsigned
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-arm64-apk.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xhyn-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  arm64:
+    name: Compile native engine and package ARM64 APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      ANDROID_NDK_VERSION: "29.0.14206865"
+
+    steps:
+      - name: Check out source without automatically downloading submodules
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 35 SDK and NDK r29
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+          df -h .
+
+      - name: Install build tools
+        run: |
+          python -m pip install --no-cache-dir "cmake==3.31.6" ninja
+          cmake --version
+          ninja --version
+          java -version
+
+      - name: Prepare pinned dependencies and patches
+        run: python3 tools/setup_repo.py
+
+      - name: Build Android Vulkan driver proxy
+        run: bash os/android/scripts/build_driver_proxy.sh
+
+      - name: Compile ARM64 game engine and stage native libraries
+        shell: bash
+        env:
+          BUILD_TYPE: Release
+          STRIP: "1"
+        run: |
+          set -euo pipefail
+          bash os/android/scripts/build_native.sh 2
+          df -h .
+
+      - name: Package and verify unsigned ARM64 candidate
+        run: |
+          python3 os/android/scripts/package_release.py --unsigned --output out/XHYN-IV-arm64-unsigned.apk
+
+      - name: Validate native libraries and package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, zipfile
+          apk=pathlib.Path("out/XHYN-IV-arm64-unsigned.apk")
+          gradle=pathlib.Path("os/android/app/build.gradle.kts").read_text()
+          code=re.search(r'versionCode\s*=\s*(\d+)', gradle).group(1)
+          with zipfile.ZipFile(apk) as z:
+              libraries={n for n in z.namelist() if n.startswith("lib/")}
+              expected={
+                "libmain.so", "libliberty_install.so", "librexruntime.so",
+                "librexgpu-gta4-native.so", "librexgpu-xenos.so", "libSDL3.so",
+                "libc++_shared.so", "libvulkan.so", "libmain_hook.so",
+                "libhook_impl.so", "libc11_threads_compat.so",
+              }
+              assert {pathlib.PurePosixPath(n).name for n in libraries} == expected, libraries
+              assert all(n.startswith("lib/arm64-v8a/") for n in libraries)
+          print(f"ARM64 native library set verified; source versionCode={code}")
+          PY
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging out/XHYN-IV-arm64-unsigned.apk | grep "^package: name='com.xhyn.ivrecomp'"
+
+      - name: Sign with approved permanent release key (manual mode only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing == 'signed-release' }}
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.XHYN_RELEASE_KEYSTORE_B64 }}
+          RELEASE_PASSWORD: ${{ secrets.XHYN_RELEASE_PASSWORD }}
+          RELEASE_ALIAS: ${{ secrets.XHYN_RELEASE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_KEYSTORE_B64" || -z "$RELEASE_PASSWORD" ]]; then
+            echo "::error::Missing permanent release-signing secrets. Configure XHYN_RELEASE_KEYSTORE_B64 and XHYN_RELEASE_PASSWORD. No temporary signing key will be generated."
+            exit 1
+          fi
+          umask 077
+          mkdir -p "$RUNNER_TEMP/xhyn-signing"
+          printf '%s' "$RELEASE_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/xhyn-signing/release.p12"
+          printf '%s' "$RELEASE_PASSWORD" > "$RUNNER_TEMP/xhyn-signing/pass.txt"
+          python3 os/android/scripts/package_release.py \
+            --keystore "$RUNNER_TEMP/xhyn-signing/release.p12" \
+            --password-file "$RUNNER_TEMP/xhyn-signing/pass.txt" \
+            --alias "${RELEASE_ALIAS:-xhyn}" \
+            --output out/XHYN-IV-arm64-signed.apk
+          rm -f "$RUNNER_TEMP/xhyn-signing/release.p12" "$RUNNER_TEMP/xhyn-signing/pass.txt"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs out/XHYN-IV-arm64-signed.apk
+
+      - name: Record checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd out && sha256sum XHYN-IV-arm64-*.apk > SHA256SUMS.txt)
+          cat out/SHA256SUMS.txt
+
+      - name: Upload APK build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XHYN-IV-ARM64-build-${{ github.run_number }}
+          path: |
+            out/XHYN-IV-arm64-unsigned.apk
+            out/XHYN-IV-arm64-signed.apk
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
