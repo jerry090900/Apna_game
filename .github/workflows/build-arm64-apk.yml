@@ -12,7 +12,7 @@ on:
           - signed-release
         default: unsigned
   push:
-    branches: [main]
+    branches: [main, codex/android-arm64-verify]
     paths:
       - .github/workflows/build-arm64-apk.yml
 
