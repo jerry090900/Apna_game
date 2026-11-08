@@ -9,7 +9,10 @@ set -euo pipefail
 . "$(dirname "$0")/env.sh"
 JOBS="${1:-$(( $(nproc) > 3 ? $(nproc) - 2 : 1 ))}"
 
-[ -d "$ANDROID_NDK" ] || { echo "no NDK at $ANDROID_NDK"; exit 1; }
+bash "$APP_DIR/scripts/check_ndk.sh"
+if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+  bash "$APP_DIR/scripts/check_ndk.sh" "$BUILD_DIR"
+fi
 
 python "$APP_DIR/scripts/materialize_symlinks.py"
 bash "$APP_DIR/scripts/setup_host_tools.sh"
@@ -37,6 +40,7 @@ if [ ! -f "$BUILD_DIR/build.ninja" ] || ! grep -Fq -- "$CPU_FLAGS" "$BUILD_DIR/C
     -DGTA4_NATIVE_DXC_EXECUTABLE="$HOST_DXC" \
     -DGTA4_NATIVE_DXC_LIBRARY_PATH="$HOST_DXC_LIB"
 fi
+bash "$APP_DIR/scripts/check_ndk.sh" "$BUILD_DIR"
 
 # Calls between unhooked recompiled functions bypass the weak sub_X aliases so
 # the compiler can inline them (idempotent; a new codegen loses the rewrite).

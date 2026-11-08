@@ -4,10 +4,15 @@
 set -euo pipefail
 . "$(dirname "$0")/env.sh"
 OUT="$REPO/out/build/android-driver-proxy"
+bash "$APP_DIR/scripts/check_ndk.sh"
+if [ -f "$OUT/CMakeCache.txt" ]; then
+  bash "$APP_DIR/scripts/check_ndk.sh" "$OUT"
+fi
 cmake -S "$APP_DIR/native" -B "$OUT" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DANDROID_STL=c++_static \
   -DCMAKE_BUILD_TYPE=Release
+bash "$APP_DIR/scripts/check_ndk.sh" "$OUT"
 cmake --build "$OUT"
 mkdir -p "$JNILIBS"
 for lib in libvulkan.so libmain_hook.so libhook_impl.so libc11_threads_compat.so; do

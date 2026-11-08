@@ -20,6 +20,7 @@ export ANDROID_HOME
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export NDK_VER="${NDK_VER:-29.0.14206865}"
 export ANDROID_NDK="${ANDROID_NDK:-${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/$NDK_VER}}"
+export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_NDK}"
 if [ -z "${JAVA_HOME:-}" ]; then
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) JAVA_HOME='/c/Program Files/Android/Android Studio/jbr' ;;

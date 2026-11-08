@@ -21,7 +21,13 @@ jobs:
         with:
           packages: platform-tools
       - name: Install API 35 build tools
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          ANDROID_NDK="$ANDROID_HOME/ndk/29.0.14206865" ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865" bash os/android/scripts/check_ndk.sh
+      - name: Test NDK preflight
+        run: python3 os/android/scripts/tests/test_check_ndk.py
       - name: Fetch pinned host-test dependencies
         run: >-
           git submodule update --init --depth 1 --jobs 4
