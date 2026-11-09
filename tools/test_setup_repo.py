@@ -211,5 +211,44 @@ class SetupTests(unittest.TestCase):
                 setup_repo.portable_paths(self.root)
 
 
+class BootstrapRetryTests(unittest.TestCase):
+    def test_retry_invokes_pinned_checkout_bootstrap_and_records_revision(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stamp = root / 'stamp'
+            with patch.object(setup_repo, 'initialized', return_value=True), \
+                 patch.object(setup_repo, 'head', return_value='pinned-revision'), \
+                 patch.object(setup_repo, 'git_path', return_value=stamp), \
+                 patch.object(setup_repo, 'run_bootstrap_with_retry') as retry:
+                setup_repo.bootstrap_vcpkg(root, retry_transient=True)
+            retry.assert_called_once_with(['sh', root / 'thirdparty/vcpkg/bootstrap-vcpkg.sh', '-disableMetrics'], root / 'thirdparty/vcpkg')
+            self.assertEqual(stamp.read_text(), 'pinned-revision\n')
+
+    def test_transient_504_then_success(self):
+        failure = subprocess.CompletedProcess([], 1, stdout=b'curl: (22) The requested URL returned error: 504\n')
+        success = subprocess.CompletedProcess([], 0, stdout=b'bootstrap complete\n')
+        with patch.object(setup_repo.subprocess, 'run', side_effect=[failure, success]) as run, \
+             patch.object(setup_repo.time, 'sleep') as sleep, contextlib.redirect_stdout(io.StringIO()) as output:
+            setup_repo.run_bootstrap_with_retry(['sh', 'bootstrap'], '.')
+        self.assertEqual(run.call_count, 2)
+        sleep.assert_called_once_with(2)
+        self.assertIn('504', output.getvalue())
+        self.assertIn('bootstrap complete', output.getvalue())
+        self.assertIn('attempt 1/3', output.getvalue())
+        self.assertIn('attempt 2/3', output.getvalue())
+
+    def test_exhausted_retries_and_nontransient_errors(self):
+        for message, count in [(b'HTTP 504\n', 3), (b'checksum mismatch HTTP 504\n', 1),
+                               (b'HTTP 404\n', 1), (b'compiler missing\n', 1)]:
+            failure = subprocess.CompletedProcess([], 1, stdout=message)
+            with self.subTest(message=message), patch.object(setup_repo.subprocess, 'run', return_value=failure) as run, \
+                 patch.object(setup_repo.time, 'sleep') as sleep, contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(setup_repo.SetupError):
+                    setup_repo.run_bootstrap_with_retry(['sh', 'bootstrap'], '.')
+                self.assertEqual(run.call_count, count)
+                self.assertEqual(sleep.call_count, count - 1)
+                self.assertIn(message.decode().strip(), output.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()

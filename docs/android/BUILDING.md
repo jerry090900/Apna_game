@@ -49,6 +49,12 @@ To prepare a reviewable build before the existing release key is available, use
 This still builds the complete package from the fresh libraries and verifies alignment.
 The unsigned APK cannot be installed until it is signed; it is not a published release.
 
+## Permanent release signing (owner setup required)
+
+The owner must approve and create the dedicated XHYN IV key once on a trusted machine, outside this checkout. For example, create a private directory with `umask 077`, then run `keytool -genkeypair -storetype PKCS12 -keystore /private/xhyn-release.p12 -alias xhyn -keyalg RSA -keysize 4096 -validity 10000`. Use interactive password prompts; never put passwords on a command line or in Git. Do not run this command in ephemeral CI or replace a missing key. Store encrypted, access-controlled backups of the keystore, password and alias in separate durable locations and test recovery. Independently record the public SHA-256 certificate fingerprint with `keytool -list -v -keystore /private/xhyn-release.p12 -alias xhyn`.
+
+After approving, backing up and provisioning the key, configure protected GitHub Actions secrets `XHYN_RELEASE_KEYSTORE_B64` (the keystore encoded as base64), `XHYN_RELEASE_PASSWORD` (same password for store and key), and `XHYN_RELEASE_KEY_ALIAS`. Configure protected variables `XHYN_RELEASE_CERT_SHA256` (the independently verified public fingerprint) and `XHYN_PREVIOUS_RELEASE_CODE` (the highest verified prior release code; use 0 only when establishing the first baseline). Never paste credentials into logs or commits. Only manually dispatch with `sign_release=true` after owner approval; the default remains unsigned. The workflow checks the certificate and strictly increasing version code, verifies APK integrity and records public metadata. Update the previous-code variable after each release; CI cannot independently prove its value is current. Preserve the same key and `com.xhyn.ivrecomp` for future updates. Actual Android install-over and data-retention tests are still required before claiming upgrade compatibility.
+
 Generate and protect your own signing key for personal builds. A build signed with a different key cannot update an installed XHYN release. Export saves before replacing an installation; uninstalling removes its data. Never commit a keystore, password file or signing credentials.
 
 The release uses generic ARMv8-A with outlined atomics and ThinLTO. The PGO helper is available for developers, but this release does not claim a trained PGO profile.

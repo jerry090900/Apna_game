@@ -358,7 +358,26 @@ def check_tools():
         raise SetupError('CMake 3.29 or newer is required. CMake 4 is supported.')
 
 
-def bootstrap_vcpkg(root):
+def run_bootstrap_with_retry(command, cwd):
+    # Retry only identified HTTP server failures, keeping every attempt in CI logs.
+    for attempt in range(3):
+        print(f'vcpkg bootstrap: attempt {attempt + 1}/3', flush=True)
+        result = subprocess.run([str(arg) for arg in command], cwd=cwd,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        output = result.stdout.decode(errors='replace')
+        print(output, end='', flush=True)
+        if result.returncode == 0:
+            return
+        transient = re.search(r'(?:HTTP(?:/\S+)?(?:\s+status)?[ :]+|returned error:\s*)(?:500|502|503|504)\b', output, re.IGNORECASE)
+        integrity = re.search(r'checksum|hash mismatch|sha256|sha512|signature', output, re.IGNORECASE)
+        if not transient or integrity or attempt == 2:
+            raise SetupError(f'vcpkg bootstrap failed (exit {result.returncode}); see output above')
+        delay = 2 ** (attempt + 1)
+        print(f'vcpkg bootstrap: transient HTTP error; retrying in {delay}s', flush=True)
+        time.sleep(delay)
+
+
+def bootstrap_vcpkg(root, *, retry_transient=False):
     source = root / 'thirdparty/vcpkg'
     if not initialized(source):
         return
@@ -369,11 +388,14 @@ def bootstrap_vcpkg(root):
         return
     script = source / ('bootstrap-vcpkg.bat' if os.name == 'nt' else 'bootstrap-vcpkg.sh')
     command = ['cmd', '/d', '/c', script, '-disableMetrics'] if os.name == 'nt' else ['sh', script, '-disableMetrics']
-    run(command, source, capture=False)
+    if retry_transient and os.name != 'nt':
+        run_bootstrap_with_retry(command, source)
+    else:
+        run(command, source, capture=False)
     stamp.write_text(revision + '\n')
 
 
-def setup(root, patches, jobs=4, *, bootstrap=True):
+def setup(root, patches, jobs=4, *, bootstrap=True, retry_bootstrap_transient=False):
     portable_paths(root)
     modules = inventory(root)
     actions = patches.migration_plan(modules)
@@ -391,7 +413,7 @@ def setup(root, patches, jobs=4, *, bootstrap=True):
     inventory(root, require_ready=True)
     patches.prepare()
     if bootstrap:
-        bootstrap_vcpkg(root)
+        bootstrap_vcpkg(root, retry_transient=retry_bootstrap_transient)
     print('All pinned dependencies are initialized and reviewed patches are ready.', flush=True)
 
 
@@ -402,6 +424,8 @@ def main(argv=None):
     mode.add_argument('--check-metadata', action='store_true', help='Validate tracked paths, mappings and patch metadata offline')
     mode.add_argument('--prepare-only', action='store_true', help='Apply patches to initialized dependencies without downloading')
     parser.add_argument('--jobs', type=int, default=4, help='Parallel submodule downloads (default: 4)')
+    parser.add_argument('--retry-bootstrap-transient', action='store_true',
+                        help='Retry transient HTTP server errors during vcpkg bootstrap')
     parser.add_argument('--root', type=Path, default=ROOT, help=argparse.SUPPRESS)
     parser.add_argument('--patch-directory', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--only', help=argparse.SUPPRESS)
@@ -430,7 +454,7 @@ def main(argv=None):
                 if args.prepare_only:
                     patches.prepare(args.only)
                 else:
-                    setup(root, patches, args.jobs)
+                    setup(root, patches, args.jobs, retry_bootstrap_transient=args.retry_bootstrap_transient)
         return 0
     except (SetupError, OSError, ValueError, KeyError) as error:
         print(f'LibertyRecomp setup: {error}', file=sys.stderr)
