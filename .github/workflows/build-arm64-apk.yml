@@ -38,6 +38,27 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Resolve signing request
+        id: signing_request
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SIGN_RELEASE_INPUT: ${{ toJSON(inputs.sign_release) }}
+        run: |
+          set -euo pipefail
+          printf 'Event: %s; sign_release input: %s\n' "$EVENT_NAME" "$SIGN_RELEASE_INPUT"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            case "$SIGN_RELEASE_INPUT" in
+              true) requested=true ;;
+              false) requested=false ;;
+              *) echo '::error::Unexpected sign_release input; refusing ambiguous dispatch'; exit 1 ;;
+            esac
+          else
+            requested=false
+          fi
+          echo "requested=$requested" >> "$GITHUB_OUTPUT"
+          echo "Effective signing requested: $requested"
+
       - name: Configure JDK 17
         uses: actions/setup-java@v4
         with:
@@ -124,7 +145,8 @@ jobs:
           retention-days: 14
 
       - name: Sign and verify with the owner-provisioned release key
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release }}
+        id: sign_release
+        if: ${{ steps.signing_request.outputs.requested == 'true' }}
         shell: bash
         env:
           KEYSTORE_B64: ${{ secrets.XHYN_RELEASE_KEYSTORE_B64 }}
@@ -150,7 +172,8 @@ jobs:
           cat out/XHYN-IV-ARM64-signed-metadata.json
 
       - name: Upload verified signed APK
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release }}
+        id: upload_signed
+        if: ${{ steps.signing_request.outputs.requested == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: XHYN-IV-arm64-SIGNED
@@ -159,3 +182,16 @@ jobs:
             out/XHYN-IV-ARM64-signed-metadata.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Confirm requested signing completed
+        if: ${{ always() && steps.signing_request.outputs.requested == 'true' }}
+        shell: bash
+        env:
+          SIGN_OUTCOME: ${{ steps.sign_release.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload_signed.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$SIGN_OUTCOME" != success || "$UPLOAD_OUTCOME" != success ]]; then
+            echo '::error::Signing was requested but the signed APK was not verified and uploaded.'
+            exit 1
+          fi
