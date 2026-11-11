@@ -49,6 +49,10 @@ android {
 
     buildTypes {
         debug {
+            // Keep debug builds installable alongside the release app so testing
+            // never requires uninstalling the user's existing game or saves.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
             isDebuggable    = true
             isJniDebuggable = true
             isMinifyEnabled = false
