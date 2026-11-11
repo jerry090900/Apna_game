@@ -91,6 +91,25 @@ jobs:
           bash os/android/scripts/build_native.sh 2
           df -h .
 
+      - name: Build installable debug APK with Android's debug signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash os/android/scripts/build_apk.sh debug
+          DEBUG_APK=os/android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$DEBUG_APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$DEBUG_APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$DEBUG_APK" | grep "^package: name='com.xhyn.ivrecomp'"
+          python3 - "$DEBUG_APK" <<'PY'
+          import pathlib, sys, zipfile
+          apk=pathlib.Path(sys.argv[1])
+          with zipfile.ZipFile(apk) as z:
+              libs=[n for n in z.namelist() if n.startswith("lib/")]
+              assert libs and all(n.startswith("lib/arm64-v8a/") for n in libs), libs
+              assert "classes.dex" in z.namelist()
+          print(f"Installable debug APK verified: {apk} ({apk.stat().st_size} bytes)")
+          PY
+
       - name: Package and verify unsigned ARM64 candidate
         run: |
           python3 os/android/scripts/package_release.py --unsigned --output out/XHYN-IV-arm64-unsigned.apk
@@ -155,6 +174,7 @@ jobs:
         with:
           name: XHYN-IV-ARM64-build-${{ github.run_number }}
           path: |
+            os/android/app/build/outputs/apk/debug/app-debug.apk
             out/XHYN-IV-arm64-unsigned.apk
             out/XHYN-IV-arm64-signed.apk
             out/SHA256SUMS.txt
